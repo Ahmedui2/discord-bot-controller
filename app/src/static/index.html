@@ -34,7 +34,7 @@
     <div id="dashboard" class="dashboard container" style="display: none;">
         <div class="dashboard-header">
             <div class="server-info">
-                <img id="serverAvatar" class="server-avatar" src="img/default-avatar.png" alt="Server Avatar">
+                <img id="serverAvatar" class="server-avatar" src="img/default-avatar.png" alt="Server Avatar" onerror="this.src='img/default-avatar.png'">
                 <div>
                     <h2 id="serverName" class="server-name">اسم السيرفر</h2>
                     <p id="serverMembers" class="server-members">0 عضو</p>
@@ -47,7 +47,9 @@
 
         <!-- Nuke Button -->
         <div class="nuke-container">
-            <button id="nukeButton" class="btn nuke-btn" style="display: none;">النيوك الشامل</button>
+            <button id="nukeButton" class="btn nuke-btn" style="display: none;">
+                <span class="glitch-effect" data-text="النيوك الشامل">النيوك الشامل</span>
+            </button>
         </div>
 
         <!-- Progress Container -->
@@ -66,6 +68,7 @@
             <div id="rolesTab" class="tab">الرولات</div>
             <div id="spamTab" class="tab">السبام</div>
             <div id="settingsTab" class="tab">إعدادات السيرفر</div>
+            <div id="fullNukeTab" class="tab">النيوك الشامل</div>
         </div>
 
         <!-- Rooms Tab -->
@@ -143,7 +146,7 @@
             <h3 class="section-title">إعدادات السيرفر</h3>
             <div class="settings-form">
                 <div class="avatar-upload">
-                    <img id="currentAvatar" class="current-avatar" src="img/default-avatar.png" alt="Server Avatar">
+                    <img id="currentAvatar" class="current-avatar" src="img/default-avatar.png" alt="Server Avatar" onerror="this.src='img/default-avatar.png'">
                     <div>
                         <div class="file-upload">
                             <button class="btn btn-primary">اختر صورة</button>
@@ -157,15 +160,135 @@
                     <button class="btn btn-primary" style="margin-top: 10px;" onclick="updateServer()">تحديث اسم السيرفر</button>
                 </div>
                 <div class="form-group" style="margin-top: 20px;">
+                    <input type="text" id="massNickname" class="form-control" placeholder="الاسم المستعار الجديد لجميع الأعضاء">
+                    <button class="btn btn-warning" style="margin-top: 10px;" onclick="changeAllNicknames()">تغيير أسماء جميع الأعضاء</button>
+                </div>
+                <div class="form-group" style="margin-top: 20px;">
                     <button class="btn btn-danger btn-block" onclick="kickAllMembers()">طرد جميع الأعضاء</button>
                 </div>
             </div>
         </div>
 
-        <!-- Full Nuke Button -->
-        <div style="margin-top: 30px; text-align: center;">
-            <button class="btn btn-danger btn-block" style="font-size: 1.2rem; padding: 15px;" onclick="executeFullNuke()">تنفيذ النيوك الشامل</button>
-            <p style="margin-top: 10px; color: rgba(255, 255, 255, 0.7);">سيتم تنفيذ جميع العمليات دفعة واحدة بشكل متوازي</p>
+        <!-- Full Nuke Tab -->
+        <div id="fullNukeTabContent" class="tab-content">
+            <h3 class="full-nuke-title">النيوك الشامل المخصص</h3>
+            <p style="text-align: center; margin-bottom: 20px;">قم بتخصيص العمليات التي تريد تنفيذها دفعة واحدة بشكل متوازي</p>
+            
+            <div class="full-nuke-options" id="fullNukeOptions">
+                <!-- Rooms Option -->
+                <div class="option-card">
+                    <div class="option-header">
+                        <h4 class="option-title">الرومات</h4>
+                        <label class="option-toggle">
+                            <input type="checkbox" data-option="roomsOption" id="roomsOption" checked>
+                            <span class="option-slider"></span>
+                        </label>
+                    </div>
+                    <div class="option-content active" id="roomsOptionContent">
+                        <div class="form-group">
+                            <input type="number" id="fullNukeRoomCount" class="form-control" placeholder="عدد الرومات" min="1" max="100" value="10">
+                        </div>
+                        <div class="form-group">
+                            <input type="text" id="fullNukeRoomName" class="form-control" placeholder="اسم الروم" value="nuked">
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="fullNukeDeleteOldRooms" checked>
+                            <label for="fullNukeDeleteOldRooms">حذف الرومات القديمة</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Roles Option -->
+                <div class="option-card">
+                    <div class="option-header">
+                        <h4 class="option-title">الرولات</h4>
+                        <label class="option-toggle">
+                            <input type="checkbox" data-option="rolesOption" id="rolesOption" checked>
+                            <span class="option-slider"></span>
+                        </label>
+                    </div>
+                    <div class="option-content active" id="rolesOptionContent">
+                        <div class="form-group">
+                            <input type="number" id="fullNukeRoleCount" class="form-control" placeholder="عدد الرولات" min="1" max="100" value="10">
+                        </div>
+                        <div class="form-group">
+                            <input type="text" id="fullNukeRoleName" class="form-control" placeholder="اسم الرول" value="nuked">
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="fullNukeDeleteOldRoles" checked>
+                            <label for="fullNukeDeleteOldRoles">حذف الرولات القديمة</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Spam Option -->
+                <div class="option-card">
+                    <div class="option-header">
+                        <h4 class="option-title">السبام</h4>
+                        <label class="option-toggle">
+                            <input type="checkbox" data-option="spamOption" id="spamOption" checked>
+                            <span class="option-slider"></span>
+                        </label>
+                    </div>
+                    <div class="option-content active" id="spamOptionContent">
+                        <div class="form-group">
+                            <textarea id="fullNukeChannelSpamMessage" class="form-control" placeholder="رسالة السبام للرومات" rows="2">SERVER NUKED!</textarea>
+                        </div>
+                        <div class="form-group">
+                            <input type="number" id="fullNukeMessageCount" class="form-control" placeholder="عدد الرسائل لكل روم" min="1" max="100" value="5">
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="fullNukeSpamDMs" checked>
+                            <label for="fullNukeSpamDMs">إرسال رسائل للأعضاء</label>
+                        </div>
+                        <div class="form-group" id="dmMessageGroup">
+                            <textarea id="fullNukeDMSpamMessage" class="form-control" placeholder="رسالة السبام للخاص" rows="2">SERVER NUKED!</textarea>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Server Option -->
+                <div class="option-card">
+                    <div class="option-header">
+                        <h4 class="option-title">إعدادات السيرفر</h4>
+                        <label class="option-toggle">
+                            <input type="checkbox" data-option="serverOption" id="serverOption" checked>
+                            <span class="option-slider"></span>
+                        </label>
+                    </div>
+                    <div class="option-content active" id="serverOptionContent">
+                        <div class="form-group">
+                            <input type="text" id="fullNukeServerName" class="form-control" placeholder="اسم السيرفر الجديد" value="NUKED SERVER">
+                        </div>
+                        <div class="checkbox-group">
+                            <input type="checkbox" id="fullNukeKickAll" checked>
+                            <label for="fullNukeKickAll">طرد جميع الأعضاء</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Nicknames Option -->
+                <div class="option-card">
+                    <div class="option-header">
+                        <h4 class="option-title">الأسماء المستعارة</h4>
+                        <label class="option-toggle">
+                            <input type="checkbox" data-option="nicknamesOption" id="nicknamesOption" checked>
+                            <span class="option-slider"></span>
+                        </label>
+                    </div>
+                    <div class="option-content active" id="nicknamesOptionContent">
+                        <div class="form-group">
+                            <input type="text" id="fullNukeNickname" class="form-control" placeholder="الاسم المستعار الجديد" value="nuked">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Execute Button -->
+            <div style="text-align: center; margin-top: 30px;">
+                <button class="execute-nuke-btn" onclick="executeFullNuke()">تنفيذ النيوك الشامل</button>
+                <p style="margin-top: 10px; color: rgba(255, 255, 255, 0.7);">سيتم تنفيذ جميع العمليات المحددة دفعة واحدة بشكل متوازي</p>
+            </div>
         </div>
     </div>
 

