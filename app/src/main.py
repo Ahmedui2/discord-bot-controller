@@ -12,6 +12,7 @@ import threading
 import time
 import json
 from werkzeug.utils import secure_filename
+import os
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'discord_bot_controller_secret'
@@ -20,6 +21,9 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Ensure upload directory exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Get port from environment variable for Render compatibility
+port = int(os.environ.get("PORT", 8080))
 
 # Global variables
 bot_instances = {}
@@ -506,4 +510,4 @@ def handle_kick_all_members():
     asyncio.run_coroutine_threadsafe(kick_members_task(), bot_loop)
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    socketio.run(app, host='0.0.0.0', port=port, debug=False)
