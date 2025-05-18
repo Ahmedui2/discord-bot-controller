@@ -1,621 +1,494 @@
 // Main JavaScript for Discord Bot Controller
 
-// Socket.io setup for real-time communication
+// Socket.io connection
 let socket;
+let currentServerId = null;
 
 // DOM Elements
-document.addEventListener('DOMContentLoaded', function() {
-    // Initialize Socket.io connection
-    initializeSocket();
-    
-    // Setup event listeners
-    setupEventListeners();
-    
-    // Setup animations
-    setupAnimations();
-});
+const loginContainer = document.getElementById('loginContainer');
+const serverSelection = document.getElementById('serverSelection');
+const dashboard = document.getElementById('dashboard');
+const nukeSections = document.getElementById('nukeSections');
+const loginForm = document.getElementById('loginForm');
+const tokenInput = document.getElementById('tokenInput');
+const serversContainer = document.getElementById('serversContainer');
+const serverNameDisplay = document.getElementById('serverName');
+const serverMembersDisplay = document.getElementById('serverMembers');
+const serverAvatar = document.getElementById('serverAvatar');
+const alertContainer = document.getElementById('alertContainer');
+const progressContainer = document.getElementById('progressContainer');
+const progressBar = document.getElementById('progressBar');
+const progressText = document.getElementById('progressText');
+const roomsList = document.getElementById('roomsList');
+const rolesList = document.getElementById('rolesList');
+const nukeButton = document.getElementById('nukeButton');
+const tabs = document.querySelectorAll('.tab');
+const tabContents = document.querySelectorAll('.tab-content');
 
 // Initialize Socket.io
 function initializeSocket() {
     socket = io();
-    
+
     // Connection events
     socket.on('connect', () => {
         console.log('Connected to server');
     });
-    
+
     socket.on('disconnect', () => {
         console.log('Disconnected from server');
-        showStatusMessage('Connection lost. Trying to reconnect...', 'error');
+        showAlert('تم قطع الاتصال بالخادم. يرجى تحديث الصفحة والمحاولة مرة أخرى.', 'danger');
     });
-    
+
     // Authentication events
     socket.on('auth_success', (data) => {
-        hideElement('.login-container');
-        showElement('.dashboard');
-        showStatusMessage('Successfully connected to Discord Bot', 'success');
-        
-        // Populate servers
-        if (data.servers && data.servers.length > 0) {
-            populateServers(data.servers);
-        }
+        hideSpinner();
+        showServerSelection(data.servers);
     });
-    
+
     socket.on('auth_error', (data) => {
-        hideElement('.loading');
-        showStatusMessage(data.message || 'Authentication failed. Please check your token.', 'error');
+        hideSpinner();
+        showAlert(data.message || 'فشل في المصادقة. يرجى التحقق من التوكن والمحاولة مرة أخرى.', 'danger');
     });
-    
+
     // Server events
     socket.on('server_selected', (data) => {
-        showElement('.nuke-panel');
-        showStatusMessage(`Server "${data.server_name}" selected`, 'info');
+        serverNameDisplay.textContent = data.server_name;
+        hideElement(serverSelection);
+        showElement(dashboard);
+        showElement(nukeButton);
     });
-    
+
+    socket.on('server_info', (data) => {
+        serverNameDisplay.textContent = data.name;
+        serverMembersDisplay.textContent = `${data.memberCount} عضو`;
+        if (data.icon) {
+            serverAvatar.src = data.icon;
+        } else {
+            serverAvatar.src = 'static/img/default-avatar.png';
+        }
+    });
+
+    // Rooms and roles events
+    socket.on('rooms_list', (data) => {
+        updateRoomsList(data.rooms);
+    });
+
+    socket.on('roles_list', (data) => {
+        updateRolesList(data.roles);
+    });
+
     // Operation events
     socket.on('operation_progress', (data) => {
-        updateProgressBar(data.progress, data.message);
+        updateProgress(data.progress, data.message);
     });
-    
+
     socket.on('operation_complete', (data) => {
-        completeProgressBar();
-        showStatusMessage(data.message, 'success');
+        hideProgress();
+        showAlert(data.message, 'success');
     });
-    
+
     socket.on('operation_error', (data) => {
-        showStatusMessage(data.message, 'error');
-    });
-    
-    // Rooms events
-    socket.on('rooms_list', (data) => {
-        populateRooms(data.rooms);
-    });
-    
-    // Roles events
-    socket.on('roles_list', (data) => {
-        populateRoles(data.roles);
-    });
-    
-    // Server settings events
-    socket.on('server_info', (data) => {
-        updateServerInfo(data);
+        hideProgress();
+        showAlert(data.message, 'danger');
     });
 }
 
-// Setup event listeners
-function setupEventListeners() {
-    // Login form
-    const loginForm = document.getElementById('login-form');
-    if (loginForm) {
-        loginForm.addEventListener('submit', function(e) {
-            e.preventDefault();
-            const tokenInput = document.getElementById('token-input');
-            if (tokenInput && tokenInput.value.trim() !== '') {
-                authenticateToken(tokenInput.value.trim());
-            } else {
-                showStatusMessage('Please enter a valid token', 'error');
-            }
-        });
-    }
-    
-    // Server selection
-    document.addEventListener('click', function(e) {
-        if (e.target.closest('.server-card')) {
-            const serverId = e.target.closest('.server-card').dataset.serverId;
-            selectServer(serverId);
-        }
-    });
-    
-    // Nuke button
-    const nukeBtn = document.getElementById('nuke-btn');
-    if (nukeBtn) {
-        nukeBtn.addEventListener('click', function() {
-            toggleElement('.nuke-options');
-        });
-    }
-    
-    // Tab switching
-    const tabs = document.querySelectorAll('.tab');
-    tabs.forEach(tab => {
-        tab.addEventListener('click', function() {
-            const tabId = this.dataset.tab;
-            switchTab(tabId);
-        });
-    });
-    
-    // Rooms actions
-    const createRoomsBtn = document.getElementById('create-rooms-btn');
-    if (createRoomsBtn) {
-        createRoomsBtn.addEventListener('click', function() {
-            const count = document.getElementById('rooms-count').value;
-            const name = document.getElementById('rooms-name').value;
-            const deleteOld = document.getElementById('delete-old-rooms').checked;
-            
-            if (count && name) {
-                createRooms(count, name, deleteOld);
-            } else {
-                showStatusMessage('Please fill in all fields', 'warning');
-            }
-        });
-    }
-    
-    // Roles actions
-    const createRolesBtn = document.getElementById('create-roles-btn');
-    if (createRolesBtn) {
-        createRolesBtn.addEventListener('click', function() {
-            const count = document.getElementById('roles-count').value;
-            const name = document.getElementById('roles-name').value;
-            const deleteOld = document.getElementById('delete-old-roles').checked;
-            
-            if (count && name) {
-                createRoles(count, name, deleteOld);
-            } else {
-                showStatusMessage('Please fill in all fields', 'warning');
-            }
-        });
-    }
-    
-    // Spam actions
-    const spamChannelsBtn = document.getElementById('spam-channels-btn');
-    if (spamChannelsBtn) {
-        spamChannelsBtn.addEventListener('click', function() {
-            const message = document.getElementById('channel-message').value;
-            const count = document.getElementById('channel-count').value;
-            
-            if (message && count) {
-                spamChannels(message, count);
-            } else {
-                showStatusMessage('Please fill in all fields', 'warning');
-            }
-        });
-    }
-    
-    const spamDMsBtn = document.getElementById('spam-dms-btn');
-    if (spamDMsBtn) {
-        spamDMsBtn.addEventListener('click', function() {
-            const message = document.getElementById('dm-message').value;
-            
-            if (message) {
-                spamDMs(message);
-            } else {
-                showStatusMessage('Please enter a message', 'warning');
-            }
-        });
-    }
-    
-    // Server settings actions
-    const updateServerBtn = document.getElementById('update-server-btn');
-    if (updateServerBtn) {
-        updateServerBtn.addEventListener('click', function() {
-            const name = document.getElementById('server-name').value;
-            updateServerSettings(name);
-        });
-    }
-    
-    const kickAllBtn = document.getElementById('kick-all-btn');
-    if (kickAllBtn) {
-        kickAllBtn.addEventListener('click', function() {
-            if (confirm('Are you sure you want to kick all members?')) {
-                kickAllMembers();
-            }
-        });
-    }
-    
-    // Avatar upload
-    const avatarInput = document.getElementById('avatar-input');
-    const serverAvatar = document.querySelector('.server-avatar');
-    
-    if (serverAvatar) {
-        serverAvatar.addEventListener('click', function() {
-            if (avatarInput) {
-                avatarInput.click();
-            }
-        });
-    }
-    
-    if (avatarInput) {
-        avatarInput.addEventListener('change', function() {
-            if (this.files && this.files[0]) {
-                uploadAvatar(this.files[0]);
-            }
-        });
-    }
-    
-    // Logout button
-    const logoutBtn = document.getElementById('logout-btn');
-    if (logoutBtn) {
-        logoutBtn.addEventListener('click', function() {
-            logout();
-        });
-    }
+// Authentication
+function authenticate(token) {
+    showSpinner();
+    socket.emit('authenticate', { token });
 }
 
-// Setup animations
-function setupAnimations() {
-    // Add animation classes to elements
-    document.querySelectorAll('.animate-on-load').forEach(el => {
-        el.classList.add('animate-fadeIn');
-    });
+// Server Selection
+function selectServer(serverId) {
+    showSpinner();
+    currentServerId = serverId;
+    socket.emit('select_server', { server_id: serverId });
     
-    // Nuke button pulse animation
-    const nukeBtn = document.getElementById('nuke-btn');
-    if (nukeBtn) {
-        nukeBtn.addEventListener('mouseenter', function() {
-            this.classList.add('animate-pulse');
-        });
-        
-        nukeBtn.addEventListener('mouseleave', function() {
-            this.classList.remove('animate-pulse');
-        });
-    }
+    // Request server info
+    socket.emit('get_server_info');
     
-    // Server cards hover effect
-    document.querySelectorAll('.server-card').forEach(card => {
-        card.addEventListener('mouseenter', function() {
-            this.classList.add('animate-glow');
-        });
-        
-        card.addEventListener('mouseleave', function() {
-            this.classList.remove('animate-glow');
-        });
-    });
+    // Request rooms and roles
+    socket.emit('get_rooms');
+    socket.emit('get_roles');
 }
 
-// Authentication functions
-function authenticateToken(token) {
-    showElement('.loading');
-    hideStatusMessage();
+// Show server selection screen
+function showServerSelection(servers) {
+    hideElement(loginContainer);
+    showElement(serverSelection);
     
-    // Emit authentication event
-    socket.emit('authenticate', { token: token });
-}
-
-function logout() {
-    socket.emit('logout');
-    showElement('.login-container');
-    hideElement('.dashboard');
-    hideElement('.nuke-panel');
-    hideElement('.nuke-options');
-    document.getElementById('token-input').value = '';
-    showStatusMessage('Logged out successfully', 'info');
-}
-
-// Server functions
-function populateServers(servers) {
-    const serverGrid = document.querySelector('.server-grid');
-    if (!serverGrid) return;
+    // Clear previous servers
+    serversContainer.innerHTML = '';
     
-    serverGrid.innerHTML = '';
-    
+    // Add servers
     servers.forEach(server => {
         const serverCard = document.createElement('div');
-        serverCard.className = 'server-card animate-fadeIn';
-        serverCard.dataset.serverId = server.id;
-        
-        let iconHtml = '';
-        if (server.icon) {
-            iconHtml = `<img src="${server.icon}" alt="${server.name}">`;
-        } else {
-            // Create initials for server without icon
-            const initials = server.name.split(' ')
-                .map(word => word[0])
-                .join('')
-                .substring(0, 2)
-                .toUpperCase();
-            iconHtml = initials;
-        }
-        
+        serverCard.className = 'server-card animated fadeInUp';
         serverCard.innerHTML = `
-            <div class="server-icon">${iconHtml}</div>
-            <div class="server-name">${server.name}</div>
-            <div class="server-members">${server.memberCount} members</div>
+            <img src="${server.icon || 'static/img/default-avatar.png'}" alt="${server.name}">
+            <h3>${server.name}</h3>
+            <p>${server.memberCount} عضو</p>
         `;
-        
-        serverGrid.appendChild(serverCard);
+        serverCard.addEventListener('click', () => selectServer(server.id));
+        serversContainer.appendChild(serverCard);
     });
 }
 
-function selectServer(serverId) {
-    // Remove selected class from all server cards
-    document.querySelectorAll('.server-card').forEach(card => {
-        card.classList.remove('selected');
-    });
-    
-    // Add selected class to clicked server card
-    const selectedCard = document.querySelector(`.server-card[data-server-id="${serverId}"]`);
-    if (selectedCard) {
-        selectedCard.classList.add('selected');
-    }
-    
-    // Emit server selection event
-    socket.emit('select_server', { server_id: serverId });
-}
-
-// Tab functions
-function switchTab(tabId) {
-    // Hide all tab contents
-    document.querySelectorAll('.tab-content').forEach(content => {
-        content.classList.remove('active');
-    });
-    
-    // Remove active class from all tabs
-    document.querySelectorAll('.tab').forEach(tab => {
-        tab.classList.remove('active');
-    });
-    
-    // Show selected tab content
-    const selectedContent = document.getElementById(`${tabId}-content`);
-    if (selectedContent) {
-        selectedContent.classList.add('active');
-    }
-    
-    // Add active class to selected tab
-    const selectedTab = document.querySelector(`.tab[data-tab="${tabId}"]`);
-    if (selectedTab) {
-        selectedTab.classList.add('active');
-    }
-    
-    // Load tab-specific data
-    if (tabId === 'rooms') {
-        socket.emit('get_rooms');
-    } else if (tabId === 'roles') {
-        socket.emit('get_roles');
-    } else if (tabId === 'server') {
-        socket.emit('get_server_info');
-    }
-}
-
-// Rooms functions
-function populateRooms(rooms) {
-    const roomsList = document.getElementById('rooms-list');
-    if (!roomsList) return;
-    
+// Update rooms list
+function updateRoomsList(rooms) {
     roomsList.innerHTML = '';
     
     if (rooms.length === 0) {
-        roomsList.innerHTML = '<p>No rooms found</p>';
+        roomsList.innerHTML = '<p>لا توجد رومات</p>';
         return;
     }
     
     rooms.forEach(room => {
         const roomItem = document.createElement('div');
-        roomItem.className = 'role-item animate-fadeIn';
+        roomItem.className = 'list-item';
         roomItem.innerHTML = `
-            <div class="role-name">${room.name}</div>
-            <div class="role-actions">
-                <button class="role-btn delete" data-room-id="${room.id}" title="Delete Room">
-                    <i class="fas fa-trash"></i>
-                </button>
+            <span class="list-item-name">${room.name}</span>
+            <div class="list-item-actions">
+                <button class="btn btn-danger btn-sm" onclick="deleteRoom('${room.id}')">حذف</button>
             </div>
         `;
-        
         roomsList.appendChild(roomItem);
     });
-    
-    // Add delete event listeners
-    document.querySelectorAll('.role-btn.delete[data-room-id]').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const roomId = this.dataset.roomId;
-            deleteRoom(roomId);
-        });
-    });
 }
 
-function createRooms(count, name, deleteOld) {
-    showStatusMessage('Creating rooms...', 'info');
-    socket.emit('create_rooms', { count, name, delete_old: deleteOld });
-}
-
-function deleteRoom(roomId) {
-    showStatusMessage('Deleting room...', 'info');
-    socket.emit('delete_room', { room_id: roomId });
-}
-
-// Roles functions
-function populateRoles(roles) {
-    const rolesList = document.getElementById('roles-list');
-    if (!rolesList) return;
-    
+// Update roles list
+function updateRolesList(roles) {
     rolesList.innerHTML = '';
     
     if (roles.length === 0) {
-        rolesList.innerHTML = '<p>No roles found</p>';
+        rolesList.innerHTML = '<p>لا توجد رولات</p>';
         return;
     }
     
     roles.forEach(role => {
         const roleItem = document.createElement('div');
-        roleItem.className = 'role-item animate-fadeIn';
+        roleItem.className = 'list-item';
         roleItem.innerHTML = `
-            <div class="role-color" style="background-color: ${role.color}"></div>
-            <div class="role-name">${role.name}</div>
-            <div class="role-actions">
-                <button class="role-btn delete" data-role-id="${role.id}" title="Delete Role">
-                    <i class="fas fa-trash"></i>
-                </button>
+            <span class="list-item-name" style="color: ${role.color}">${role.name}</span>
+            <div class="list-item-actions">
+                <button class="btn btn-danger btn-sm" onclick="deleteRole('${role.id}')">حذف</button>
             </div>
         `;
-        
         rolesList.appendChild(roleItem);
-    });
-    
-    // Add delete event listeners
-    document.querySelectorAll('.role-btn.delete[data-role-id]').forEach(btn => {
-        btn.addEventListener('click', function() {
-            const roleId = this.dataset.roleId;
-            deleteRole(roleId);
-        });
     });
 }
 
-function createRoles(count, name, deleteOld) {
-    showStatusMessage('Creating roles...', 'info');
+// Create rooms
+function createRooms() {
+    const count = document.getElementById('roomCount').value;
+    const name = document.getElementById('roomName').value;
+    const deleteOld = document.getElementById('deleteOldRooms').checked;
+    
+    if (!count || !name) {
+        showAlert('يرجى ملء جميع الحقول', 'warning');
+        return;
+    }
+    
+    showProgress();
+    socket.emit('create_rooms', { count, name, delete_old: deleteOld });
+}
+
+// Delete room
+function deleteRoom(roomId) {
+    showProgress();
+    socket.emit('delete_room', { room_id: roomId });
+}
+
+// Create roles
+function createRoles() {
+    const count = document.getElementById('roleCount').value;
+    const name = document.getElementById('roleName').value;
+    const deleteOld = document.getElementById('deleteOldRoles').checked;
+    
+    if (!count || !name) {
+        showAlert('يرجى ملء جميع الحقول', 'warning');
+        return;
+    }
+    
+    showProgress();
     socket.emit('create_roles', { count, name, delete_old: deleteOld });
 }
 
+// Delete role
 function deleteRole(roleId) {
-    showStatusMessage('Deleting role...', 'info');
+    showProgress();
     socket.emit('delete_role', { role_id: roleId });
 }
 
-// Spam functions
-function spamChannels(message, count) {
-    showStatusMessage('Sending messages to channels...', 'info');
+// Spam channels
+function spamChannels() {
+    const message = document.getElementById('channelSpamMessage').value;
+    const count = document.getElementById('messageCount').value;
+    
+    if (!message || !count) {
+        showAlert('يرجى ملء جميع الحقول', 'warning');
+        return;
+    }
+    
+    showProgress();
     socket.emit('spam_channels', { message, count });
 }
 
-function spamDMs(message) {
-    showStatusMessage('Sending DMs to members...', 'info');
+// Spam DMs
+function spamDMs() {
+    const message = document.getElementById('dmSpamMessage').value;
+    
+    if (!message) {
+        showAlert('يرجى إدخال رسالة', 'warning');
+        return;
+    }
+    
+    showProgress();
     socket.emit('spam_dms', { message });
 }
 
-// Server settings functions
-function updateServerInfo(data) {
-    const serverNameInput = document.getElementById('server-name');
-    const serverAvatar = document.querySelector('.server-avatar img');
+// Update server
+function updateServer() {
+    const name = document.getElementById('serverNameInput').value;
     
-    if (serverNameInput) {
-        serverNameInput.value = data.name || '';
+    if (!name) {
+        showAlert('يرجى إدخال اسم السيرفر', 'warning');
+        return;
     }
     
-    if (serverAvatar && data.icon) {
-        serverAvatar.src = data.icon;
-    }
-}
-
-function updateServerSettings(name) {
-    showStatusMessage('Updating server settings...', 'info');
+    showProgress();
     socket.emit('update_server', { name });
 }
 
-function uploadAvatar(file) {
+// Kick all members
+function kickAllMembers() {
+    if (confirm('هل أنت متأكد من طرد جميع الأعضاء؟')) {
+        showProgress();
+        socket.emit('kick_all_members');
+    }
+}
+
+// Upload avatar
+function uploadAvatar() {
+    const fileInput = document.getElementById('avatarFile');
+    const file = fileInput.files[0];
+    
+    if (!file) {
+        showAlert('يرجى اختيار صورة', 'warning');
+        return;
+    }
+    
     const formData = new FormData();
     formData.append('avatar', file);
     
-    // Create a FileReader to preview the image
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        const serverAvatar = document.querySelector('.server-avatar img');
-        if (serverAvatar) {
-            serverAvatar.src = e.target.result;
-        }
-    };
-    reader.readAsDataURL(file);
+    showProgress();
     
-    // Send the file to the server
-    showStatusMessage('Uploading avatar...', 'info');
-    
-    // Use fetch API to upload the file
     fetch('/upload_avatar', {
         method: 'POST',
         body: formData
     })
     .then(response => response.json())
     .then(data => {
+        hideProgress();
         if (data.success) {
-            showStatusMessage('Avatar uploaded successfully', 'success');
+            showAlert('تم رفع الصورة بنجاح', 'success');
+            socket.emit('get_server_info');
         } else {
-            showStatusMessage(data.message || 'Failed to upload avatar', 'error');
+            showAlert(data.message || 'فشل في رفع الصورة', 'danger');
         }
     })
     .catch(error => {
-        showStatusMessage('Error uploading avatar', 'error');
+        hideProgress();
+        showAlert('حدث خطأ أثناء رفع الصورة', 'danger');
         console.error('Error:', error);
     });
 }
 
-function kickAllMembers() {
-    showStatusMessage('Kicking all members...', 'info');
-    socket.emit('kick_all_members');
+// Execute full nuke (all operations in parallel)
+function executeFullNuke() {
+    if (!confirm('هل أنت متأكد من تنفيذ النيوك الشامل؟ هذا سيقوم بتنفيذ جميع العمليات دفعة واحدة!')) {
+        return;
+    }
+    
+    showElement(nukeSections);
+    showProgress();
+    
+    // Get all parameters
+    const roomCount = document.getElementById('roomCount').value || 10;
+    const roomName = document.getElementById('roomName').value || 'nuked';
+    const deleteOldRooms = true;
+    
+    const roleCount = document.getElementById('roleCount').value || 10;
+    const roleName = document.getElementById('roleName').value || 'nuked';
+    const deleteOldRoles = true;
+    
+    const channelSpamMessage = document.getElementById('channelSpamMessage').value || 'SERVER NUKED!';
+    const messageCount = document.getElementById('messageCount').value || 5;
+    
+    const dmSpamMessage = document.getElementById('dmSpamMessage').value || 'SERVER NUKED!';
+    
+    const serverName = document.getElementById('serverNameInput').value || 'NUKED SERVER';
+    
+    // Emit all operations at once
+    socket.emit('execute_full_nuke', {
+        room_count: roomCount,
+        room_name: roomName,
+        delete_old_rooms: deleteOldRooms,
+        role_count: roleCount,
+        role_name: roleName,
+        delete_old_roles: deleteOldRoles,
+        channel_spam_message: channelSpamMessage,
+        message_count: messageCount,
+        dm_spam_message: dmSpamMessage,
+        server_name: serverName,
+        kick_all: true
+    });
+    
+    // Listen for full nuke progress
+    socket.on('full_nuke_progress', (data) => {
+        updateProgress(data.overall_progress, data.message);
+    });
+    
+    // Listen for full nuke completion
+    socket.on('full_nuke_complete', () => {
+        hideProgress();
+        showAlert('تم تنفيذ النيوك الشامل بنجاح!', 'success');
+        
+        // Refresh data
+        socket.emit('get_server_info');
+        socket.emit('get_rooms');
+        socket.emit('get_roles');
+    });
 }
 
-// UI Helper functions
-function showElement(selector) {
-    const element = document.querySelector(selector);
+// Show alert
+function showAlert(message, type) {
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${type}`;
+    alert.textContent = message;
+    
+    alertContainer.innerHTML = '';
+    alertContainer.appendChild(alert);
+    
+    // Auto hide after 5 seconds
+    setTimeout(() => {
+        alert.remove();
+    }, 5000);
+}
+
+// Show/hide spinner
+function showSpinner() {
+    const spinner = document.createElement('div');
+    spinner.className = 'spinner';
+    document.body.appendChild(spinner);
+}
+
+function hideSpinner() {
+    const spinner = document.querySelector('.spinner');
+    if (spinner) {
+        spinner.remove();
+    }
+}
+
+// Show/hide progress
+function showProgress() {
+    progressContainer.style.display = 'block';
+    progressBar.style.width = '0%';
+    progressText.textContent = 'جاري التنفيذ...';
+}
+
+function hideProgress() {
+    progressContainer.style.display = 'none';
+}
+
+function updateProgress(percent, message) {
+    progressBar.style.width = `${percent}%`;
+    progressText.textContent = message || `${percent}%`;
+}
+
+// Show/hide elements
+function showElement(element) {
     if (element) {
         element.style.display = 'block';
     }
 }
 
-function hideElement(selector) {
-    const element = document.querySelector(selector);
+function hideElement(element) {
     if (element) {
         element.style.display = 'none';
     }
 }
 
-function toggleElement(selector) {
-    const element = document.querySelector(selector);
-    if (element) {
-        if (element.style.display === 'none' || getComputedStyle(element).display === 'none') {
-            element.style.display = 'block';
-        } else {
-            element.style.display = 'none';
-        }
-    }
-}
-
-function showStatusMessage(message, type) {
-    const statusContainer = document.createElement('div');
-    statusContainer.className = `status-message status-${type} animate-fadeIn`;
-    statusContainer.textContent = message;
-    
-    // Remove any existing status messages
-    document.querySelectorAll('.status-message').forEach(el => {
-        el.remove();
+// Tab switching
+function switchTab(tabId) {
+    tabs.forEach(tab => {
+        tab.classList.remove('active');
     });
     
-    // Add the new status message
-    document.body.appendChild(statusContainer);
-    
-    // Auto-hide after 5 seconds
-    setTimeout(() => {
-        statusContainer.classList.add('animate-fadeOut');
-        setTimeout(() => {
-            statusContainer.remove();
-        }, 500);
-    }, 5000);
-}
-
-function hideStatusMessage() {
-    document.querySelectorAll('.status-message').forEach(el => {
-        el.remove();
+    tabContents.forEach(content => {
+        content.classList.remove('active');
     });
+    
+    document.getElementById(tabId).classList.add('active');
+    document.getElementById(`${tabId}Content`).classList.add('active');
 }
 
-function updateProgressBar(progress, message) {
-    const progressBar = document.querySelector('.progress-bar');
-    const progressText = document.querySelector('.progress-text');
+// Event Listeners
+document.addEventListener('DOMContentLoaded', () => {
+    // Initialize Socket.io
+    initializeSocket();
     
-    if (progressBar) {
-        progressBar.style.width = `${progress}%`;
-    }
-    
-    if (progressText && message) {
-        progressText.textContent = message;
-    }
-}
-
-function completeProgressBar() {
-    const progressBar = document.querySelector('.progress-bar');
-    const progressText = document.querySelector('.progress-text');
-    
-    if (progressBar) {
-        progressBar.style.width = '100%';
-    }
-    
-    if (progressText) {
-        progressText.textContent = 'Operation completed';
-    }
-    
-    // Reset after 3 seconds
-    setTimeout(() => {
-        if (progressBar) {
-            progressBar.style.width = '0%';
+    // Login form submission
+    loginForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const token = tokenInput.value.trim();
+        
+        if (!token) {
+            showAlert('يرجى إدخال التوكن', 'warning');
+            return;
         }
         
-        if (progressText) {
-            progressText.textContent = '';
+        authenticate(token);
+    });
+    
+    // Nuke button click
+    nukeButton.addEventListener('click', () => {
+        if (nukeSections.style.display === 'block') {
+            hideElement(nukeSections);
+        } else {
+            showElement(nukeSections);
+            // Set default active tab
+            switchTab('roomsTab');
         }
-    }, 3000);
+    });
+    
+    // Tab switching
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            switchTab(tab.id);
+        });
+    });
+    
+    // Avatar file input change
+    document.getElementById('avatarFile').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                document.getElementById('currentAvatar').src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+    });
+});
+
+// Logout
+function logout() {
+    socket.emit('logout');
+    hideElement(dashboard);
+    hideElement(serverSelection);
+    hideElement(nukeSections);
+    showElement(loginContainer);
+    tokenInput.value = '';
 }

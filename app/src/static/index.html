@@ -3,167 +3,173 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>لوحة التحكم في بوت ديسكورد</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <title>واجهة التحكم في بوت ديسكورد</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;700&family=Tajawal:wght@400;700&display=swap">
+    <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+    <!-- Alert Container -->
+    <div id="alertContainer"></div>
+
     <!-- Login Container -->
-    <div class="login-container">
-        <div class="login-box animate-on-load">
-            <h1 class="login-title">لوحة التحكم في بوت ديسكورد</h1>
-            <form id="login-form">
-                <input type="password" id="token-input" class="token-input" placeholder="أدخل توكن البوت" required>
-                <button type="submit" class="connect-btn">
-                    <i class="fas fa-plug"></i> اتصال
-                </button>
+    <div id="loginContainer" class="login-container">
+        <div class="login-box animated fadeInUp">
+            <h1 class="login-title">واجهة التحكم في بوت ديسكورد</h1>
+            <form id="loginForm" class="login-form">
+                <div class="form-group">
+                    <input type="text" id="tokenInput" class="form-control" placeholder="أدخل توكن البوت" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">اتصال</button>
             </form>
-            <div class="loading">
-                <div class="loading-spinner"></div>
-            </div>
         </div>
+    </div>
+
+    <!-- Server Selection -->
+    <div id="serverSelection" class="server-selection container" style="display: none;">
+        <h2 class="section-title">اختر السيرفر</h2>
+        <div id="serversContainer" class="servers-container"></div>
     </div>
 
     <!-- Dashboard -->
-    <div class="dashboard">
-        <div class="container">
-            <div class="dashboard-header">
-                <h2 class="dashboard-title">لوحة التحكم في بوت ديسكورد</h2>
-                <button id="logout-btn" class="logout-btn">
-                    <i class="fas fa-sign-out-alt"></i> تسجيل الخروج
-                </button>
-            </div>
-
-            <!-- Server Selection -->
-            <div class="server-selection">
-                <h3 class="section-title">
-                    <i class="fas fa-server"></i> اختر السيرفر
-                </h3>
-                <div class="server-grid">
-                    <!-- Server cards will be populated here -->
+    <div id="dashboard" class="dashboard container" style="display: none;">
+        <div class="dashboard-header">
+            <div class="server-info">
+                <img id="serverAvatar" class="server-avatar" src="img/default-avatar.png" alt="Server Avatar">
+                <div>
+                    <h2 id="serverName" class="server-name">اسم السيرفر</h2>
+                    <p id="serverMembers" class="server-members">0 عضو</p>
                 </div>
             </div>
-
-            <!-- Nuke Panel -->
-            <div class="nuke-panel">
-                <h3 class="section-title">
-                    <i class="fas fa-bomb"></i> نيوك السيرفر
-                </h3>
-                <button id="nuke-btn" class="nuke-btn">
-                    <i class="fas fa-radiation"></i> نيوك
-                </button>
-
-                <div class="nuke-options">
-                    <div class="tabs">
-                        <div class="tab active" data-tab="rooms">الرومات</div>
-                        <div class="tab" data-tab="roles">الرولات</div>
-                        <div class="tab" data-tab="spam">السبام</div>
-                        <div class="tab" data-tab="server">إعدادات السيرفر</div>
-                    </div>
-
-                    <!-- Rooms Tab -->
-                    <div id="rooms-content" class="tab-content active">
-                        <div class="rooms-options">
-                            <div class="option-row">
-                                <div class="option-label">عدد الرومات:</div>
-                                <input type="number" id="rooms-count" class="option-input" min="1" value="10">
-                            </div>
-                            <div class="option-row">
-                                <div class="option-label">اسم الرومات:</div>
-                                <input type="text" id="rooms-name" class="option-input" placeholder="مثال: hacked-by">
-                            </div>
-                            <div class="option-row">
-                                <div class="checkbox-container">
-                                    <input type="checkbox" id="delete-old-rooms">
-                                    <label for="delete-old-rooms">حذف الرومات القديمة</label>
-                                </div>
-                            </div>
-                            <button id="create-rooms-btn" class="action-btn">إنشاء الرومات</button>
-                        </div>
-
-                        <h4 class="mt-20 mb-10">الرومات الحالية:</h4>
-                        <div id="rooms-list" class="roles-list">
-                            <!-- Rooms will be populated here -->
-                        </div>
-                    </div>
-
-                    <!-- Roles Tab -->
-                    <div id="roles-content" class="tab-content">
-                        <div class="rooms-options">
-                            <div class="option-row">
-                                <div class="option-label">عدد الرولات:</div>
-                                <input type="number" id="roles-count" class="option-input" min="1" value="10">
-                            </div>
-                            <div class="option-row">
-                                <div class="option-label">اسم الرولات:</div>
-                                <input type="text" id="roles-name" class="option-input" placeholder="مثال: hacked-by">
-                            </div>
-                            <div class="option-row">
-                                <div class="checkbox-container">
-                                    <input type="checkbox" id="delete-old-roles">
-                                    <label for="delete-old-roles">حذف الرولات القديمة</label>
-                                </div>
-                            </div>
-                            <button id="create-roles-btn" class="action-btn">إنشاء الرولات</button>
-                        </div>
-
-                        <h4 class="mt-20 mb-10">الرولات الحالية:</h4>
-                        <div id="roles-list" class="roles-list">
-                            <!-- Roles will be populated here -->
-                        </div>
-                    </div>
-
-                    <!-- Spam Tab -->
-                    <div id="spam-content" class="tab-content">
-                        <div class="spam-options">
-                            <h4 class="mb-10">سبام الرومات:</h4>
-                            <textarea id="channel-message" class="message-textarea" placeholder="أدخل رسالة السبام للرومات"></textarea>
-                            <div class="option-row">
-                                <div class="option-label">عدد الرسائل لكل روم:</div>
-                                <input type="number" id="channel-count" class="option-input" min="1" value="10">
-                            </div>
-                            <button id="spam-channels-btn" class="action-btn">إرسال للرومات</button>
-                        </div>
-
-                        <div class="spam-options mt-20">
-                            <h4 class="mb-10">سبام الخاص:</h4>
-                            <textarea id="dm-message" class="message-textarea" placeholder="أدخل رسالة السبام للأعضاء"></textarea>
-                            <button id="spam-dms-btn" class="action-btn">إرسال للأعضاء</button>
-                        </div>
-                    </div>
-
-                    <!-- Server Settings Tab -->
-                    <div id="server-content" class="tab-content">
-                        <div class="server-settings">
-                            <div class="server-avatar">
-                                <img src="{{ url_for('static', filename='img/default-avatar.png') }}" alt="Server Avatar">
-                                <div class="avatar-overlay">
-                                    <span class="avatar-text">تغيير الصورة</span>
-                                </div>
-                                <input type="file" id="avatar-input" class="file-input" accept="image/*">
-                            </div>
-                            <div class="option-row">
-                                <div class="option-label">اسم السيرفر:</div>
-                                <input type="text" id="server-name" class="option-input" placeholder="أدخل اسم السيرفر">
-                            </div>
-                            <button id="update-server-btn" class="action-btn mt-10">تحديث إعدادات السيرفر</button>
-                            <button id="kick-all-btn" class="action-btn danger mt-20">طرد جميع الأعضاء</button>
-                        </div>
-                    </div>
-
-                    <!-- Progress Bar -->
-                    <div class="progress-container mt-20">
-                        <div class="progress-bar"></div>
-                        <div class="progress-text"></div>
-                    </div>
-                </div>
+            <div class="dashboard-actions">
+                <button class="btn btn-danger" onclick="logout()">تسجيل الخروج</button>
             </div>
+        </div>
+
+        <!-- Nuke Button -->
+        <div class="nuke-container">
+            <button id="nukeButton" class="btn nuke-btn" style="display: none;">النيوك الشامل</button>
+        </div>
+
+        <!-- Progress Container -->
+        <div id="progressContainer" class="progress-container">
+            <div class="progress-bar">
+                <div id="progressBar" class="progress"></div>
+            </div>
+            <p id="progressText" class="progress-text">جاري التنفيذ...</p>
         </div>
     </div>
 
-    <!-- Socket.io -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.6.1/socket.io.min.js"></script>
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <!-- Nuke Sections -->
+    <div id="nukeSections" class="nuke-sections container" style="display: none;">
+        <div class="tabs">
+            <div id="roomsTab" class="tab active">الرومات</div>
+            <div id="rolesTab" class="tab">الرولات</div>
+            <div id="spamTab" class="tab">السبام</div>
+            <div id="settingsTab" class="tab">إعدادات السيرفر</div>
+        </div>
+
+        <!-- Rooms Tab -->
+        <div id="roomsTabContent" class="tab-content active">
+            <h3 class="section-title">إدارة الرومات</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <input type="number" id="roomCount" class="form-control" placeholder="عدد الرومات" min="1" max="100" value="10">
+                </div>
+                <div class="form-group">
+                    <input type="text" id="roomName" class="form-control" placeholder="اسم الروم" value="nuked">
+                </div>
+                <div class="form-group">
+                    <button class="btn btn-primary" onclick="createRooms()">إنشاء</button>
+                </div>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="deleteOldRooms">
+                <label for="deleteOldRooms">حذف الرومات القديمة</label>
+            </div>
+            <div class="list-container">
+                <h4>الرومات الحالية</h4>
+                <div id="roomsList"></div>
+            </div>
+        </div>
+
+        <!-- Roles Tab -->
+        <div id="rolesTabContent" class="tab-content">
+            <h3 class="section-title">إدارة الرولات</h3>
+            <div class="form-row">
+                <div class="form-group">
+                    <input type="number" id="roleCount" class="form-control" placeholder="عدد الرولات" min="1" max="100" value="10">
+                </div>
+                <div class="form-group">
+                    <input type="text" id="roleName" class="form-control" placeholder="اسم الرول" value="nuked">
+                </div>
+                <div class="form-group">
+                    <button class="btn btn-primary" onclick="createRoles()">إنشاء</button>
+                </div>
+            </div>
+            <div class="checkbox-group">
+                <input type="checkbox" id="deleteOldRoles">
+                <label for="deleteOldRoles">حذف الرولات القديمة</label>
+            </div>
+            <div class="list-container">
+                <h4>الرولات الحالية</h4>
+                <div id="rolesList"></div>
+            </div>
+        </div>
+
+        <!-- Spam Tab -->
+        <div id="spamTabContent" class="tab-content">
+            <h3 class="section-title">إرسال السبام</h3>
+            <div class="form-group">
+                <h4>سبام الرومات</h4>
+                <textarea id="channelSpamMessage" class="form-control" placeholder="رسالة السبام" rows="3">SERVER NUKED!</textarea>
+                <div class="form-row" style="margin-top: 10px;">
+                    <div class="form-group">
+                        <input type="number" id="messageCount" class="form-control" placeholder="عدد الرسائل لكل روم" min="1" max="100" value="5">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn btn-primary" onclick="spamChannels()">إرسال</button>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group" style="margin-top: 20px;">
+                <h4>سبام الخاص</h4>
+                <textarea id="dmSpamMessage" class="form-control" placeholder="رسالة السبام للخاص" rows="3">SERVER NUKED!</textarea>
+                <button class="btn btn-primary" style="margin-top: 10px;" onclick="spamDMs()">إرسال للأعضاء</button>
+            </div>
+        </div>
+
+        <!-- Settings Tab -->
+        <div id="settingsTabContent" class="tab-content">
+            <h3 class="section-title">إعدادات السيرفر</h3>
+            <div class="settings-form">
+                <div class="avatar-upload">
+                    <img id="currentAvatar" class="current-avatar" src="img/default-avatar.png" alt="Server Avatar">
+                    <div>
+                        <div class="file-upload">
+                            <button class="btn btn-primary">اختر صورة</button>
+                            <input type="file" id="avatarFile" accept="image/*">
+                        </div>
+                        <button class="btn btn-success" style="margin-top: 10px;" onclick="uploadAvatar()">رفع الصورة</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <input type="text" id="serverNameInput" class="form-control" placeholder="اسم السيرفر الجديد">
+                    <button class="btn btn-primary" style="margin-top: 10px;" onclick="updateServer()">تحديث اسم السيرفر</button>
+                </div>
+                <div class="form-group" style="margin-top: 20px;">
+                    <button class="btn btn-danger btn-block" onclick="kickAllMembers()">طرد جميع الأعضاء</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Full Nuke Button -->
+        <div style="margin-top: 30px; text-align: center;">
+            <button class="btn btn-danger btn-block" style="font-size: 1.2rem; padding: 15px;" onclick="executeFullNuke()">تنفيذ النيوك الشامل</button>
+            <p style="margin-top: 10px; color: rgba(255, 255, 255, 0.7);">سيتم تنفيذ جميع العمليات دفعة واحدة بشكل متوازي</p>
+        </div>
+    </div>
+
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="js/main.js"></script>
 </body>
 </html>
